@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,8 +12,19 @@ import (
 	"github.com/go-test/deep"
 	"github.com/hashicorp/hcl"
 	"github.com/hashicorp/hcl/hcl/ast"
+	"github.com/hashicorp/hcl/hcl/token"
 	"github.com/hashicorp/vault/internalshared/configutil"
 )
+
+var DefaultCustomHeaders = map[string]map[string]string{
+	"default": {
+		"Strict-Transport-Security": configutil.StrictTransportSecurity,
+	},
+}
+
+func boolPointer(x bool) *bool {
+	return &x
+}
 
 func testConfigRaftRetryJoin(t *testing.T) {
 	config, err := LoadConfigFile("./test-fixtures/raft_retry_join.hcl")
@@ -24,8 +36,9 @@ func testConfigRaftRetryJoin(t *testing.T) {
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:8200",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:8200",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 			DisableMlock: true,
@@ -40,7 +53,7 @@ func testConfigRaftRetryJoin(t *testing.T) {
 			},
 		},
 	}
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
@@ -56,8 +69,9 @@ func testLoadConfigFile_topLevel(t *testing.T, entropy *configutil.Entropy) {
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:443",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 
@@ -150,7 +164,7 @@ func testLoadConfigFile_topLevel(t *testing.T, entropy *configutil.Entropy) {
 	if entropy != nil {
 		expected.Entropy = entropy
 	}
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
@@ -166,12 +180,14 @@ func testLoadConfigFile_json2(t *testing.T, entropy *configutil.Entropy) {
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:443",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:444",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:444",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 
@@ -239,15 +255,15 @@ func testLoadConfigFile_json2(t *testing.T, entropy *configutil.Entropy) {
 	if entropy != nil {
 		expected.Entropy = entropy
 	}
-	config.Listeners[0].RawConfig = nil
-	config.Listeners[1].RawConfig = nil
+
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
 }
 
 func testParseEntropy(t *testing.T, oss bool) {
-	var tests = []struct {
+	tests := []struct {
 		inConfig   string
 		outErr     error
 		outEntropy configutil.Entropy
@@ -257,7 +273,7 @@ func testParseEntropy(t *testing.T, oss bool) {
 				mode = "augmentation"
 				}`,
 			outErr:     nil,
-			outEntropy: configutil.Entropy{configutil.EntropyAugmentation},
+			outEntropy: configutil.Entropy{Mode: configutil.EntropyAugmentation},
 		},
 		{
 			inConfig: `entropy "seal" {
@@ -328,8 +344,9 @@ func testLoadConfigFileIntegerAndBooleanValuesCommon(t *testing.T, path string) 
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:8200",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:8200",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 			DisableMlock: true,
@@ -355,7 +372,7 @@ func testLoadConfigFileIntegerAndBooleanValuesCommon(t *testing.T, path string) 
 		EnableUIRaw:     true,
 	}
 
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
@@ -371,8 +388,9 @@ func testLoadConfigFile(t *testing.T) {
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:443",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 
@@ -441,13 +459,69 @@ func testLoadConfigFile(t *testing.T) {
 		MaxLeaseTTLRaw:     "10h",
 		DefaultLeaseTTL:    10 * time.Hour,
 		DefaultLeaseTTLRaw: "10h",
+
+		EnableResponseHeaderHostname:      true,
+		EnableResponseHeaderHostnameRaw:   true,
+		EnableResponseHeaderRaftNodeID:    true,
+		EnableResponseHeaderRaftNodeIDRaw: true,
+
+		LicensePath: "/path/to/license",
 	}
 
 	addExpectedEntConfig(expected, []string{})
 
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
+	}
+}
+
+func testUnknownFieldValidation(t *testing.T) {
+	config, err := LoadConfigFile("./test-fixtures/config.hcl")
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	expected := []configutil.ConfigError{
+		{
+			Problem: "unknown or unsupported field bad_value found in configuration",
+			Position: token.Pos{
+				Filename: "./test-fixtures/config.hcl",
+				Offset:   583,
+				Line:     34,
+				Column:   5,
+			},
+		},
+	}
+	errors := config.Validate("./test-fixtures/config.hcl")
+
+	for _, er1 := range errors {
+		found := false
+		if strings.Contains(er1.String(), "sentinel") {
+			// This happens on OSS, and is fine
+			continue
+		}
+		for _, ex := range expected {
+			// TODO: Only test the string, pos may change
+			if ex.Problem == er1.Problem && reflect.DeepEqual(ex.Position, er1.Position) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("found unexpected error: %v", er1.String())
+		}
+	}
+	for _, ex := range expected {
+		found := false
+		for _, er1 := range errors {
+			if ex.Problem == er1.Problem && reflect.DeepEqual(ex.Position, er1.Position) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("could not find expected error: %v", ex.String())
+		}
 	}
 }
 
@@ -461,8 +535,9 @@ func testLoadConfigFile_json(t *testing.T) {
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:443",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 
@@ -528,7 +603,7 @@ func testLoadConfigFile_json(t *testing.T) {
 
 	addExpectedEntConfig(expected, []string{})
 
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
@@ -546,8 +621,9 @@ func testLoadConfigDir(t *testing.T) {
 
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:443",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 
@@ -592,7 +668,7 @@ func testLoadConfigDir(t *testing.T) {
 
 	addExpectedEntConfig(expected, []string{"http"})
 
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
@@ -606,28 +682,31 @@ func testConfig_Sanitized(t *testing.T) {
 	sanitizedConfig := config.Sanitized()
 
 	expected := map[string]interface{}{
-		"api_addr":                     "top_level_api_addr",
-		"cache_size":                   0,
-		"cluster_addr":                 "top_level_cluster_addr",
-		"cluster_cipher_suites":        "",
-		"cluster_name":                 "testcluster",
-		"default_lease_ttl":            10 * time.Hour,
-		"default_max_request_duration": 0 * time.Second,
-		"disable_cache":                true,
-		"disable_clustering":           false,
-		"disable_indexing":             false,
-		"disable_mlock":                true,
-		"disable_performance_standby":  false,
-		"disable_printable_check":      false,
-		"disable_sealwrap":             true,
-		"raw_storage_endpoint":         true,
-		"disable_sentinel_trace":       true,
-		"enable_ui":                    true,
+		"api_addr":                            "top_level_api_addr",
+		"cache_size":                          0,
+		"cluster_addr":                        "top_level_cluster_addr",
+		"cluster_cipher_suites":               "",
+		"cluster_name":                        "testcluster",
+		"default_lease_ttl":                   10 * time.Hour,
+		"default_max_request_duration":        0 * time.Second,
+		"disable_cache":                       true,
+		"disable_clustering":                  false,
+		"disable_indexing":                    false,
+		"disable_mlock":                       true,
+		"disable_performance_standby":         false,
+		"disable_printable_check":             false,
+		"disable_sealwrap":                    true,
+		"raw_storage_endpoint":                true,
+		"disable_sentinel_trace":              true,
+		"enable_ui":                           true,
+		"enable_response_header_hostname":     false,
+		"enable_response_header_raft_node_id": false,
 		"ha_storage": map[string]interface{}{
 			"cluster_addr":       "top_level_cluster_addr",
 			"disable_clustering": true,
 			"redirect_addr":      "top_level_api_addr",
-			"type":               "consul"},
+			"type":               "consul",
+		},
 		"listeners": []interface{}{
 			map[string]interface{}{
 				"config": map[string]interface{}{
@@ -691,7 +770,7 @@ func testConfig_Sanitized(t *testing.T) {
 
 	addExpectedEntSanitizedConfig(expected, []string{"http"})
 
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(sanitizedConfig, expected); len(diff) > 0 {
 		t.Fatalf("bad, diff: %#v", diff)
 	}
@@ -707,8 +786,15 @@ listener "tcp" {
 	tls_key_file = "./certs/server.key"
 	tls_client_ca_file = "./certs/rootca.crt"
 	tls_min_version = "tls12"
+	tls_max_version = "tls13"
 	tls_require_and_verify_client_cert = true
 	tls_disable_client_certs = true
+    telemetry {
+      unauthenticated_metrics_access = true
+    }
+    profiling {
+      unauthenticated_pprof_access = true
+    }
 }`))
 
 	config := Config{
@@ -737,14 +823,60 @@ listener "tcp" {
 					TLSKeyFile:                    "./certs/server.key",
 					TLSClientCAFile:               "./certs/rootca.crt",
 					TLSMinVersion:                 "tls12",
+					TLSMaxVersion:                 "tls13",
 					TLSRequireAndVerifyClientCert: true,
 					TLSDisableClientCerts:         true,
+					Telemetry: configutil.ListenerTelemetry{
+						UnauthenticatedMetricsAccess: true,
+					},
+					Profiling: configutil.ListenerProfiling{
+						UnauthenticatedPProfAccess: true,
+					},
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 		},
 	}
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, *expected); diff != nil {
+		t.Fatal(diff)
+	}
+}
+
+func testParseSockaddrTemplate(t *testing.T) {
+	config, err := ParseConfig(`
+api_addr = <<EOF
+{{- GetAllInterfaces | include "flags" "loopback" | include "type" "ipv4" | attr "address" -}}
+EOF
+listener "tcp" {
+	address = <<EOF
+{{- GetAllInterfaces | include "flags" "loopback" | include "type" "ipv4" | attr "address" -}}:443
+EOF
+	cluster_address = <<EOF
+{{- GetAllInterfaces | include "flags" "loopback" | include "type" "ipv4" | attr "address" -}}:8201
+EOF
+	tls_disable = true
+}`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := &Config{
+		APIAddr: "127.0.0.1",
+		SharedConfig: &configutil.SharedConfig{
+			Listeners: []*configutil.Listener{
+				{
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					ClusterAddress:        "127.0.0.1:8201",
+					TLSDisable:            true,
+					CustomResponseHeaders: DefaultCustomHeaders,
+				},
+			},
+		},
+	}
+	config.Prune()
+	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
 }
@@ -764,12 +896,13 @@ func testParseSeals(t *testing.T) {
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:443",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 			Seals: []*configutil.KMS{
-				&configutil.KMS{
+				{
 					Type:    "pkcs11",
 					Purpose: []string{"many", "purposes"},
 					Config: map[string]string{
@@ -784,7 +917,7 @@ func testParseSeals(t *testing.T) {
 						"generate_key":           "true",
 					},
 				},
-				&configutil.KMS{
+				{
 					Type:     "pkcs11",
 					Purpose:  []string{"single"},
 					Disabled: true,
@@ -803,6 +936,7 @@ func testParseSeals(t *testing.T) {
 			},
 		},
 	}
+	config.Prune()
 	require.Equal(t, config, expected)
 }
 
@@ -816,8 +950,9 @@ func testLoadConfigFileLeaseMetrics(t *testing.T) {
 		SharedConfig: &configutil.SharedConfig{
 			Listeners: []*configutil.Listener{
 				{
-					Type:    "tcp",
-					Address: "127.0.0.1:443",
+					Type:                  "tcp",
+					Address:               "127.0.0.1:443",
+					CustomResponseHeaders: DefaultCustomHeaders,
 				},
 			},
 
@@ -890,7 +1025,7 @@ func testLoadConfigFileLeaseMetrics(t *testing.T) {
 
 	addExpectedEntConfig(expected, []string{})
 
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}
@@ -923,7 +1058,7 @@ func testConfigRaftAutopilot(t *testing.T) {
 			},
 		},
 	}
-	config.Listeners[0].RawConfig = nil
+	config.Prune()
 	if diff := deep.Equal(config, expected); diff != nil {
 		t.Fatal(diff)
 	}

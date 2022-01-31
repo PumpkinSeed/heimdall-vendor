@@ -17,11 +17,11 @@ func (b *SystemBackend) activityQueryPath() *framework.Path {
 	return &framework.Path{
 		Pattern: "internal/counters/activity$",
 		Fields: map[string]*framework.FieldSchema{
-			"start_time": &framework.FieldSchema{
+			"start_time": {
 				Type:        framework.TypeTime,
 				Description: "Start of query interval",
 			},
-			"end_time": &framework.FieldSchema{
+			"end_time": {
 				Type:        framework.TypeTime,
 				Description: "End of query interval",
 			},
@@ -41,7 +41,7 @@ func (b *SystemBackend) activityQueryPath() *framework.Path {
 // monthlyActivityCountPath is available in every namespace
 func (b *SystemBackend) monthlyActivityCountPath() *framework.Path {
 	return &framework.Path{
-		Pattern:         "internal/counters/activity/monthly",
+		Pattern:         "internal/counters/activity/monthly$",
 		HelpSynopsis:    strings.TrimSpace(sysHelp["activity-monthly"][0]),
 		HelpDescription: strings.TrimSpace(sysHelp["activity-monthly"][1]),
 		Operations: map[logical.Operation]framework.OperationHandler{
@@ -50,6 +50,13 @@ func (b *SystemBackend) monthlyActivityCountPath() *framework.Path {
 				Summary:  "Report the number of clients for this month, for this namespace and all child namespaces.",
 			},
 		},
+	}
+}
+
+func (b *SystemBackend) activityPaths() []*framework.Path {
+	return []*framework.Path{
+		b.monthlyActivityCountPath(),
+		b.activityQueryPath(),
 	}
 }
 
@@ -109,7 +116,7 @@ func (b *SystemBackend) handleClientMetricQuery(ctx context.Context, req *logica
 	// Also convert any user inputs to UTC to avoid
 	// problems later.
 	if endTime.IsZero() {
-		endTime = timeutil.EndOfMonth(time.Now().UTC().AddDate(0, -1, 0))
+		endTime = timeutil.EndOfMonth(timeutil.StartOfPreviousMonth(time.Now().UTC()))
 	} else {
 		endTime = endTime.UTC()
 	}
@@ -142,7 +149,10 @@ func (b *SystemBackend) handleMonthlyActivityCount(ctx context.Context, req *log
 		return logical.ErrorResponse("no activity log present"), nil
 	}
 
-	results := a.partialMonthClientCount(ctx)
+	results, err := a.partialMonthClientCount(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if results == nil {
 		return logical.RespondWithStatusCode(nil, req, http.StatusNoContent)
 	}
