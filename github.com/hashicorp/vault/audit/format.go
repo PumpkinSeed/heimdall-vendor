@@ -10,7 +10,6 @@ import (
 
 	squarejwt "gopkg.in/square/go-jose.v2/jwt"
 
-	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/vault/helper/namespace"
 	"github.com/hashicorp/vault/sdk/helper/salt"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -48,7 +47,7 @@ func (f *AuditFormatter) FormatRequest(ctx context.Context, w io.Writer, config 
 
 	salt, err := f.Salt(ctx)
 	if err != nil {
-		return errwrap.Wrapf("error fetching salt: {{err}}", err)
+		return fmt.Errorf("error fetching salt: %w", err)
 	}
 
 	// Set these to the input values at first
@@ -111,6 +110,7 @@ func (f *AuditFormatter) FormatRequest(ctx context.Context, w io.Writer, config 
 
 		Request: &AuditRequest{
 			ID:                  req.ID,
+			ClientID:            req.ClientID,
 			ClientToken:         req.ClientToken,
 			ClientTokenAccessor: req.ClientTokenAccessor,
 			Operation:           req.Operation,
@@ -159,7 +159,7 @@ func (f *AuditFormatter) FormatResponse(ctx context.Context, w io.Writer, config
 
 	salt, err := f.Salt(ctx)
 	if err != nil {
-		return errwrap.Wrapf("error fetching salt: {{err}}", err)
+		return fmt.Errorf("error fetching salt: %w", err)
 	}
 
 	// Set these to the input values at first
@@ -337,6 +337,7 @@ type AuditResponseEntry struct {
 
 type AuditRequest struct {
 	ID                            string                 `json:"id,omitempty"`
+	ClientID                      string                 `json:"client_id,omitempty"`
 	ReplicationCluster            string                 `json:"replication_cluster,omitempty"`
 	Operation                     logical.Operation      `json:"operation,omitempty"`
 	MountType                     string                 `json:"mount_type,omitempty"`

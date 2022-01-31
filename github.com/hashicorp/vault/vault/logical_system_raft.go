@@ -152,7 +152,7 @@ func (b *SystemBackend) raftStoragePaths() []*framework.Path {
 			Pattern: "storage/raft/autopilot/state",
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.handleStorageRaftAutopilotState(),
+					Callback: b.verifyDROperationTokenOnSecondary(b.handleStorageRaftAutopilotState(), false),
 					Summary:  "Returns the state of the raft cluster under integrated storage as seen by autopilot.",
 				},
 			},
@@ -162,7 +162,6 @@ func (b *SystemBackend) raftStoragePaths() []*framework.Path {
 		},
 		{
 			Pattern: "storage/raft/autopilot/configuration",
-
 			Fields: map[string]*framework.FieldSchema{
 				"cleanup_dead_servers": {
 					Type:        framework.TypeBool,
@@ -192,10 +191,10 @@ func (b *SystemBackend) raftStoragePaths() []*framework.Path {
 
 			Operations: map[logical.Operation]framework.OperationHandler{
 				logical.ReadOperation: &framework.PathOperation{
-					Callback: b.handleStorageRaftAutopilotConfigRead(),
+					Callback: b.verifyDROperationTokenOnSecondary(b.handleStorageRaftAutopilotConfigRead(), false),
 				},
 				logical.UpdateOperation: &framework.PathOperation{
-					Callback: b.handleStorageRaftAutopilotConfigUpdate(),
+					Callback: b.verifyDROperationTokenOnSecondary(b.handleStorageRaftAutopilotConfigUpdate(), false),
 				},
 			},
 
@@ -374,8 +373,9 @@ func (b *SystemBackend) handleRaftBootstrapAnswerWrite() framework.OperationFunc
 
 		return &logical.Response{
 			Data: map[string]interface{}{
-				"peers":       peers,
-				"tls_keyring": &keyring,
+				"peers":              peers,
+				"tls_keyring":        &keyring,
+				"autoloaded_license": LicenseAutoloaded(b.Core),
 			},
 		}, nil
 	}
@@ -402,8 +402,8 @@ func (b *SystemBackend) handleStorageRaftSnapshotRead() framework.OperationFunc 
 
 func (b *SystemBackend) handleStorageRaftAutopilotState() framework.OperationFunc {
 	return func(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-		raftBackend, ok := b.Core.underlyingPhysical.(*raft.RaftBackend)
-		if !ok {
+		raftBackend := b.Core.getRaftBackend()
+		if raftBackend == nil {
 			return logical.ErrorResponse("raft storage is not in use"), logical.ErrInvalidRequest
 		}
 
@@ -431,12 +431,12 @@ func (b *SystemBackend) handleStorageRaftAutopilotState() framework.OperationFun
 
 func (b *SystemBackend) handleStorageRaftAutopilotConfigRead() framework.OperationFunc {
 	return func(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-		raftStorage, ok := b.Core.underlyingPhysical.(*raft.RaftBackend)
-		if !ok {
+		raftBackend := b.Core.getRaftBackend()
+		if raftBackend == nil {
 			return logical.ErrorResponse("raft storage is not in use"), logical.ErrInvalidRequest
 		}
 
-		config := raftStorage.AutopilotConfig()
+		config := raftBackend.AutopilotConfig()
 		if config == nil {
 			return nil, nil
 		}
@@ -456,8 +456,8 @@ func (b *SystemBackend) handleStorageRaftAutopilotConfigRead() framework.Operati
 
 func (b *SystemBackend) handleStorageRaftAutopilotConfigUpdate() framework.OperationFunc {
 	return func(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
-		raftStorage, ok := b.Core.underlyingPhysical.(*raft.RaftBackend)
-		if !ok {
+		raftBackend := b.Core.getRaftBackend()
+		if raftBackend == nil {
 			return logical.ErrorResponse("raft storage is not in use"), logical.ErrInvalidRequest
 		}
 
@@ -506,7 +506,7 @@ func (b *SystemBackend) handleStorageRaftAutopilotConfigUpdate() framework.Opera
 			persist = true
 		}
 
-		effectiveConf := raftStorage.AutopilotConfig()
+		effectiveConf := raftBackend.AutopilotConfig()
 		effectiveConf.Merge(config)
 
 		if effectiveConf.CleanupDeadServers && effectiveConf.MinQuorum < 3 {
@@ -525,7 +525,7 @@ func (b *SystemBackend) handleStorageRaftAutopilotConfigUpdate() framework.Opera
 		}
 
 		// Set the effectiveConfig
-		raftStorage.SetAutopilotConfig(effectiveConf)
+		raftBackend.SetAutopilotConfig(effectiveConf)
 
 		return nil, nil
 	}
@@ -638,7 +638,6 @@ func (b *SystemBackend) handleStorageRaftSnapshotWrite(force bool) framework.Ope
 			}
 
 			return nil
-
 		}()
 
 		return nil, nil
